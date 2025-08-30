@@ -1,32 +1,79 @@
-# Illustrative example if/when you wire a real LLM:
-# Requires OPENAI_API_KEY in env and openai package (or httpx against your own model server).
-# Not used by default.
+"""OpenAI-backed valuation model."""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Dict
 
 from .base import ValuationModel
 from ..core.config import settings
-import os
+
 
 class OpenAIModel(ValuationModel):
-    def predict(self, address: str) -> dict:
-        # You would combine upstream signals (comps, trends, features)
-        # and prompt the model to produce a structured JSON response.
-        # For brevity, we return a stub here; keep the same keys.
-        return {
-            "base": 950_000,
-            "low": 900_000,
-            "high": 1_000_000,
-            "confidence": 78,
-            "trend_mom_pct": 0.9,
-            "comps": 5,
-            "insights": [
-                "Recent comparable within 0.5km at ~960k supports the estimate.",
-                "Market momentum mildly positive over the past month."
-            ],
-            "sparkline": [48,50,51,52,53,55,56,57,58,59,60,61],
-            "factors": {
-                "comps_weight": 0.35,
-                "trend_weight": 0.25,
-                "locality_weight": 0.20,
-                "property_weight": 0.20,
-            },
+    def predict(self, features: Dict[str, Any]) -> Dict[str, Any]:
+        """Call OpenAI's chat completion API to estimate property valuation.
+
+        Parameters
+        ----------
+        features: Dict[str, Any]
+            Structured feature payload describing the property.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Parsed JSON response from the model containing valuation fields.
+        """
+
+        api_key = settings.OPENAI_API_KEY
+        model = settings.OPENAI_MODEL
+
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY missing from settings")
+        if not model:
+            raise RuntimeError("OPENAI_MODEL missing from settings")
+
+        try:  # Import lazily so the package remains optional for other models
+            import openai
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError("openai package is required for OpenAIModel") from exc
+
+        openai.api_key = api_key
+
+        prompt = (
+            "You are a real estate valuation model. "
+            "Respond ONLY with valid JSON containing keys "
+            "base, low, high, confidence, trend_mom_pct, comps, insights, "
+            "sparkline, and factors. Use these features: "
+            f"{json.dumps(features)}"
+        )
+
+        try:
+            completion = openai.ChatCompletion.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Return only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0,
+            )
+            content = completion["choices"][0]["message"]["content"]
+            data = json.loads(content)
+        except Exception as exc:  # pragma: no cover - network/JSON issues
+            raise RuntimeError("Error invoking OpenAI API or parsing response") from exc
+
+        expected = {
+            "base",
+            "low",
+            "high",
+            "confidence",
+            "trend_mom_pct",
+            "comps",
+            "insights",
+            "sparkline",
+            "factors",
         }
+        missing = expected.difference(data)
+        if missing:
+            raise ValueError(f"Malformed response missing keys: {sorted(missing)}")
+
+        return data
