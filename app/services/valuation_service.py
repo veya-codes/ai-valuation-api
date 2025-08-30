@@ -1,5 +1,8 @@
 import json
 from statistics import median
+
+from fastapi import HTTPException
+
 from ..core.config import settings
 from ..core.cache import cache
 from ..core.utils import normalize_address, weak_etag
@@ -39,8 +42,55 @@ class ValuationService:
         self.comps = comps_client()
         self.trends = trends_client()
 
+    async def identify_property(self, raw_address: str) -> list[dict]:
+        """Use OpenAI to disambiguate the provided address.
+
+        Returns a list of candidate addresses with confidence scores. If the
+        OpenAI client is unavailable, the raw address is returned with high
+        confidence so the service can continue operating offline.
+        """
+        api_key = settings.OPENAI_API_KEY
+        model = settings.OPENAI_MODEL
+
+        try:
+            if not api_key or not model:
+                raise RuntimeError("OpenAI settings missing")
+            import openai  # type: ignore
+            openai.api_key = api_key
+            prompt = (
+                "You are an address parser. Given an input address, return JSON "
+                "with a 'candidates' list, each item having 'address' and "
+                "'confidence' (0-1)."
+                f" Input: {raw_address!r}"
+            )
+            completion = await openai.ChatCompletion.acreate(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Return only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0,
+            )
+            content = completion["choices"][0]["message"]["content"]
+            data = json.loads(content)
+            candidates = data.get("candidates", [])
+            if not isinstance(candidates, list):
+                candidates = []
+            return candidates
+        except Exception:
+            # Fallback: treat the raw address as a single high-confidence candidate
+            return [{"address": raw_address, "confidence": 1.0}]
+
     async def value_address(self, raw_address: str) -> tuple[dict, bool, str]:
-        addr_norm = normalize_address(raw_address)
+        candidates = await self.identify_property(raw_address)
+        if len(candidates) != 1 or candidates[0].get("confidence", 0) < 0.7:
+            raise HTTPException(
+                status_code=400,
+                detail="Unable to confidently identify the property address; please provide more details.",
+            )
+
+        confirmed_address = candidates[0]["address"]
+        addr_norm = normalize_address(confirmed_address)
         cache_key = f"valuation:{addr_norm}"
         cached = cache.get(cache_key)
         if cached:
@@ -105,7 +155,7 @@ class ValuationService:
 
         # 5) Assemble API response
         payload = {
-            "address": raw_address,
+            "address": confirmed_address,
             "currency": settings.DEFAULT_CURRENCY,
             "valuation": model_out["base"],
             "range": {"low": model_out["low"], "high": model_out["high"]},
