@@ -9,6 +9,7 @@ from ..data.trends_client import trends_client
 from ..models.mock_model import MockModel
 from ..models.ml_model import SklearnRegressor
 from ..models.llm_model import LLMModel
+from ..models.openai_model import OpenAIModel
 
 class ValuationService:
     """
@@ -27,6 +28,9 @@ class ValuationService:
                 self.model = MockModel()
         elif provider == "llm":
             self.model = LLMModel()
+        elif provider == "openai":
+            assert settings.OPENAI_API_KEY, "OPENAI_API_KEY is required for OpenAI model"
+            self.model = OpenAIModel()
         else:
             self.model = MockModel()
 
