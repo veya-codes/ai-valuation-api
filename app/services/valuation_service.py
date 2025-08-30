@@ -1,4 +1,5 @@
 import json
+import re
 from statistics import median
 
 from fastapi import HTTPException
@@ -49,6 +50,31 @@ class ValuationService:
         OpenAI client is unavailable, the raw address is returned with high
         confidence so the service can continue operating offline.
         """
+        # Basic local parsing for unit indicators before falling back to OpenAI
+        # Examples: "123 Main St #5", "123 Main St Unit 5", "5, 123 Main St"
+        unit_indicator = False
+        cleaned_address = raw_address
+
+        # Pattern: leading number followed by a comma (unit at start)
+        leading_match = re.match(r"^\s*\d+\s*,\s*(.+)$", raw_address)
+        if leading_match:
+            cleaned_address = leading_match.group(1).strip()
+            unit_indicator = True
+
+        # Patterns like "Unit 5" or "#5" anywhere in the string
+        if not unit_indicator and re.search(r"\b(unit|apt|suite)\s*\w+", raw_address, re.IGNORECASE):
+            cleaned_address = re.sub(r"\b(unit|apt|suite)\s*\w+", "", raw_address, flags=re.IGNORECASE)
+            unit_indicator = True
+        if not unit_indicator and "#" in raw_address:
+            cleaned_address = re.sub(r"#\s*\w+", "", raw_address).strip()
+            unit_indicator = True
+
+        if unit_indicator:
+            cleaned_address = cleaned_address.strip().strip(",")
+            cleaned_address = re.sub(r"\s+,", ",", cleaned_address)
+            cleaned_address = re.sub(r"\s{2,}", " ", cleaned_address)
+            return [{"address": cleaned_address, "property_type": "condo", "confidence": 1.0}]
+
         api_key = settings.OPENAI_API_KEY
         model = settings.OPENAI_MODEL
 
@@ -90,6 +116,7 @@ class ValuationService:
             )
 
         confirmed_address = candidates[0]["address"]
+        property_type_hint = candidates[0].get("property_type")
         addr_norm = normalize_address(confirmed_address)
         cache_key = f"valuation:{addr_norm}"
         cached = cache.get(cache_key)
@@ -132,11 +159,15 @@ class ValuationService:
             direction = "up" if trend_mom_pct > 0 else "down"
             insights.append(f"Local price index is {direction} {abs(trend_mom_pct):.1f}% MoM.")
 
-        # Basic heuristic: presence of unit indicators implies a condo/apt
+        # Basic heuristic: presence of unit indicators implies a condo/apt.
+        # If identify_property hinted at a property type, use it.
         property_type = (
-            "condo"
-            if any(token in addr_norm for token in ("#", "unit", "apt", "suite"))
-            else "house"
+            property_type_hint
+            or (
+                "condo"
+                if any(token in addr_norm for token in ("#", "unit", "apt", "suite"))
+                else "house"
+            )
         )
 
         # Shared feature dictionary passed to any model
