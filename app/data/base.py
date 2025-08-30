@@ -30,6 +30,7 @@ class ComparableSale:
     beds: Optional[int] = None
     baths: Optional[float] = None
     living_sqft: Optional[int] = None
+    property_type: Optional[str] = None
 
 @dataclass
 class AreaTrendPoint:
