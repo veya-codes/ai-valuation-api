@@ -118,6 +118,16 @@ class ValuationService:
         confirmed_address = candidates[0]["address"]
         property_type_hint = candidates[0].get("property_type")
         addr_norm = normalize_address(confirmed_address)
+        # Basic heuristic: presence of unit indicators implies a condo/apt.
+        # If identify_property hinted at a property type, use it.
+        property_type = (
+            property_type_hint
+            or (
+                "condo"
+                if any(token in addr_norm for token in ("#", "unit", "apt", "suite"))
+                else "house"
+            )
+        )
         cache_key = f"valuation:{addr_norm}"
         cached = cache.get(cache_key)
         if cached:
@@ -132,6 +142,7 @@ class ValuationService:
         comps = await self.comps.recent_sales(
             point=geo.point, radius_km=2.0, max_age_days=90, limit=6
         )
+        comps = [c for c in comps if c.property_type == property_type]
         comps_prices = [c.sale_price for c in comps]
         comps_avg = int(sum(comps_prices)/len(comps_prices)) if comps_prices else None
 
@@ -158,17 +169,6 @@ class ValuationService:
         if trend_mom_pct != 0:
             direction = "up" if trend_mom_pct > 0 else "down"
             insights.append(f"Local price index is {direction} {abs(trend_mom_pct):.1f}% MoM.")
-
-        # Basic heuristic: presence of unit indicators implies a condo/apt.
-        # If identify_property hinted at a property type, use it.
-        property_type = (
-            property_type_hint
-            or (
-                "condo"
-                if any(token in addr_norm for token in ("#", "unit", "apt", "suite"))
-                else "house"
-            )
-        )
 
         # Shared feature dictionary passed to any model
         features = {
