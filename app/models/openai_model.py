@@ -43,8 +43,9 @@ class OpenAIModel(ValuationModel):
             "You are a real estate valuation model. "
             "Respond ONLY with valid JSON containing keys "
             "base, low, high, confidence, trend_mom_pct, comps, insights, "
-            "sparkline, and factors. Use these features: "
-            f"{json.dumps(features)}"
+            "sparkline, and factors. "
+            f"The property type is {features.get('property_type')}. "
+            f"Use these features: {json.dumps(features)}"
         )
 
         try:

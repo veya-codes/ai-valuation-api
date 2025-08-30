@@ -132,6 +132,13 @@ class ValuationService:
             direction = "up" if trend_mom_pct > 0 else "down"
             insights.append(f"Local price index is {direction} {abs(trend_mom_pct):.1f}% MoM.")
 
+        # Basic heuristic: presence of unit indicators implies a condo/apt
+        property_type = (
+            "condo"
+            if any(token in addr_norm for token in ("#", "unit", "apt", "suite"))
+            else "house"
+        )
+
         # Shared feature dictionary passed to any model
         features = {
             "address_norm": addr_norm,
@@ -141,6 +148,7 @@ class ValuationService:
             "area_code": geo.area.code,
             "city": geo.city,
             "province": geo.province,
+            "property_type": property_type,
             "trend_mom_pct": trend_mom_pct,
             "comps_count": len(comps),
             "comps_avg_price": comps_avg or 0,
